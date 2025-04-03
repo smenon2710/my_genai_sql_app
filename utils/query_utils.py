@@ -1,54 +1,75 @@
+import sqlite3
 import os
 import re
 import pandas as pd
-import pandasql as ps
+import tempfile
+import streamlit as st
 from openai import OpenAI
 from dotenv import load_dotenv
 
-# Load environment variables from .env
 load_dotenv()
 
-# Get API key from .env file
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise ValueError("🚨 OPENAI_API_KEY not found. Please set it in your .env file.")
+# 🔐 Load OpenAI Key
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Initialize OpenAI client
-client = OpenAI(api_key=api_key)
+# 🔧 Generate SQLite schema from uploaded DataFrame
+def get_schema_from_db(conn):
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = cursor.fetchall()
 
-# Extract the schema (table name and columns) from the dataframe
-def get_schema(df: pd.DataFrame, table_name="data") -> str:
-    column_info = [f"{col} ({str(dtype)})" for col, dtype in zip(df.columns, df.dtypes)]
-    schema_str = f"Table: {table_name}\nColumns:\n" + "\n".join(column_info)
-    return schema_str
+    schema = ""
+    for table_name in tables:
+        table_name = table_name[0]
+        cursor.execute(f"PRAGMA table_info({table_name});")
+        columns = cursor.fetchall()
+        schema += f"Table: {table_name}\n"
+        for col in columns:
+            schema += f" - {col[1]} ({col[2]})\n"
+    return schema
 
-# Use OpenAI to generate SQL query based on user input and schema
-def generate_sql(prompt: str, schema: str) -> str:
-    system_prompt = (
-        "You are an expert data analyst who writes SQLite SQL queries. "
-        "Given the table schema and a user's question, generate the SQL query "
-        "that answers it. Only return valid SQL code. Do not add explanations."
-    )
+# 🧠 Generate SQL from user prompt and schema
+def generate_sql(prompt, schema):
+    full_prompt = f"""
+You are an expert SQL assistant. 
+Generate a SQLite SQL query for the user based on the following schema:
+
+{schema}
+
+Question: {prompt}
+SQL:
+"""
 
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4",
         messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{schema}\n\nUser question: {prompt}"}
+            {"role": "system", "content": "You are a helpful SQL assistant."},
+            {"role": "user", "content": full_prompt},
         ],
-        temperature=0,
+        temperature=0.2
     )
 
-    sql_code = response.choices[0].message.content.strip()
+    return response.choices[0].message.content.strip()
 
-    # Extract SQL from markdown/code block if needed
-    match = re.search(r"```sql\s*(.*?)\s*```", sql_code, re.DOTALL)
-    return match.group(1) if match else sql_code
-
-# Run the generated SQL query on the user-uploaded dataframe
-def run_sql(df: pd.DataFrame, sql: str) -> pd.DataFrame:
+# ▶️ Run SQL query and return results as DataFrame
+def run_sql(conn, sql):
     try:
-        result = ps.sqldf(sql, {"data": df})
-        return result
+        df = pd.read_sql_query(sql, conn)
+        return df
     except Exception as e:
-        raise RuntimeError(f"❌ SQL Execution Error: {e}")
+        st.error(f"Error executing SQL: {e}")
+        return pd.DataFrame()
+
+# 💾 Save DataFrame to SQLite
+def save_to_sqlite(df, db_path, table_name):
+    try:
+        conn = sqlite3.connect(db_path)
+        df.to_sql(table_name, conn, if_exists='replace', index=False)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        st.error(f"Failed to save to SQLite: {e}")
+
+# 🧽 Clean table names
+def clean_table_name(name):
+    return re.sub(r'\W+', '_', name).lower()
