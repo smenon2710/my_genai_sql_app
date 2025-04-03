@@ -1,83 +1,58 @@
+# app.py
 import streamlit as st
 import pandas as pd
-import openai
-from pandasql import sqldf
-import os
-from dotenv import load_dotenv
+import sqlite3
+import tempfile
+from utils.query_utils import generate_sql, run_sql
 
-# Load API key
-load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+st.set_page_config(page_title="GenAI SQL Assistant", layout="wide")
 
-st.set_page_config(page_title="GenAI Excel/CSV Analyst", layout="wide")
-st.title("🧠 GenAI Analyst: Ask Questions About Your File")
-st.write("Upload a CSV or Excel file and ask anything. No SQL needed.")
+st.title("🧠 GenAI SQL Assistant")
+st.write("Upload your Excel or CSV file and ask questions in plain English.")
 
-# Upload section
-uploaded_file = st.file_uploader("📁 Upload CSV or Excel", type=["csv", "xlsx"])
+uploaded_file = st.file_uploader("📤 Upload a CSV or Excel file", type=["csv", "xlsx"])
+
+df = None
+conn = None
 
 if uploaded_file:
-    if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
+    try:
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
 
-    st.success("✅ File uploaded successfully")
-    st.write("Preview:")
-    st.dataframe(df.head(), use_container_width=True)
+        st.success("✅ File uploaded successfully!")
+        st.write("Preview of uploaded data:")
+        st.dataframe(df)
 
-    # Generate schema
-    def get_schema(df):
-        schema_str = ""
-        for col in df.columns:
-            dtype = str(df[col].dtype)
-            schema_str += f"{col} ({dtype})\n"
-        return schema_str
+        # Create temp SQLite DB and load data
+        conn = sqlite3.connect(":memory:")
+        df.to_sql("uploaded_data", conn, index=False, if_exists="replace")
 
-    schema = get_schema(df)
+        # Prompt box
+        user_input = st.text_input("🔍 Ask your question (e.g., 'Show me average sales by region')")
 
-    # User query
-    st.markdown("---")
-    user_query = st.text_input("🔍 Ask a question about your file")
+        if user_input:
+            with st.spinner("Generating SQL..."):
+                # Dynamically build schema string for prompt context
+                schema_info = f"CREATE TABLE uploaded_data ({', '.join(f'{col} {pd.api.types.infer_dtype(df[col])}' for col in df.columns)});"
 
-    if user_query:
-        with st.spinner("🤖 Thinking..."):
-            prompt = f"""
-You are a data assistant. Write a SQL query that runs on a pandas DataFrame named `df`.
-Schema:
-{schema}
-
-User question: {user_query}
-Only return valid SQL syntax for use with pandasql.
-"""
-            try:
-                response = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0
-                )
-                sql = response.choices[0].message.content.strip()
-                st.markdown("### 🧾 Generated SQL")
+                sql = generate_sql(user_input, schema_info)
                 st.code(sql, language="sql")
 
-                # Run SQL
-                result = sqldf(sql, locals())
-                st.success("✅ Query executed")
-                st.dataframe(result, use_container_width=True)
+                try:
+                    result = run_sql(conn, sql)
+                    st.success("✅ Query executed successfully!")
+                    st.dataframe(result)
 
-                if result.shape[1] >= 2:
-                    try:
-                        st.bar_chart(result.set_index(result.columns[0]))
-                    except Exception as e:
-                        st.warning("⚠️ Could not render chart")
+                    if result.shape[1] >= 2:
+                        try:
+                            st.bar_chart(result.set_index(result.columns[0]))
+                        except Exception as e:
+                            st.warning(f"⚠️ Chart rendering skipped due to error: {e}")
+                except Exception as e:
+                    st.error(f"❌ Failed to run SQL: {e}")
 
-                # Download button
-                csv = result.to_csv(index=False).encode('utf-8')
-                st.download_button("⬇️ Download Result as CSV", csv, "query_result.csv", "text/csv")
-
-            except Exception as e:
-                st.error(f"Error: {e}")
-else:
-    st.info("⬆️ Upload a file to get started")
+    except Exception as e:
+        st.error(f"❌ Error reading file: {e}")
