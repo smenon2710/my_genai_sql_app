@@ -5,28 +5,12 @@ import re
 from openai import OpenAI
 from dotenv import load_dotenv
 
-# Load environment variables (from .env)
 load_dotenv()
-
-# Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# 🔧 Get schema from the SQLite DB
-def get_schema():
-    conn = sqlite3.connect("schema/sample_data.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-    tables = cursor.fetchall()
-
-    schema = ""
-    for t in tables:
-        cursor.execute(f"PRAGMA table_info({t[0]})")
-        cols = cursor.fetchall()
-        schema += f"\nTable {t[0]}:\n"
-        for col in cols:
-            schema += f"  {col[1]} ({col[2]})\n"
-    conn.close()
-    return schema
+# 🔧 Get absolute path to DB file (portable for deployment)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "..", "schema", "sample_data.db")
 
 # 🧠 Generate SQL using GPT
 def generate_sql(nl_query, schema):
@@ -59,7 +43,7 @@ User request:
 
 # 🔍 Run SQL query against SQLite DB
 def run_sql(sql):
-    conn = sqlite3.connect("schema/sample_data.db")
+    conn = sqlite3.connect(DB_PATH)
     try:
         df = pd.read_sql_query(sql, conn)
         return df
@@ -67,3 +51,20 @@ def run_sql(sql):
         return f"❌ SQL Error: {e}"
     finally:
         conn.close()
+
+# 📜 Extract DB Schema for the LLM
+def get_schema():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = cursor.fetchall()
+
+    schema = ""
+    for t in tables:
+        cursor.execute(f"PRAGMA table_info({t[0]})")
+        cols = cursor.fetchall()
+        schema += f"\nTable {t[0]}:\n"
+        for col in cols:
+            schema += f"  {col[1]} ({col[2]})\n"
+    conn.close()
+    return schema
