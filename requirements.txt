@@ -1,6 +1,7 @@
 streamlit
-openai
 pandas
+openai
 python-dotenv
 pandasql
+sqlalchemy
 openpyxl
