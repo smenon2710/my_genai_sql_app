@@ -2,10 +2,9 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-import os
-import tempfile
 
 from utils.query_utils import get_schema, generate_sql, run_sql
+from utils.load_utils import load_table
 
 st.set_page_config(page_title="GenAI SQL Assistant", layout="wide")
 st.title("🤖 GenAI SQL Assistant")
@@ -13,15 +12,7 @@ st.title("🤖 GenAI SQL Assistant")
 uploaded_file = st.file_uploader("📁 Upload a CSV or Excel file", type=["csv", "xlsx"])
 
 if uploaded_file:
-    # Save uploaded file to a temp directory
-    with tempfile.NamedTemporaryFile(delete=False, suffix=uploaded_file.name) as tmp_file:
-        tmp_file.write(uploaded_file.getvalue())
-        tmp_path = tmp_file.name
-
-    if uploaded_file.name.endswith(".csv"):
-        df = pd.read_csv(tmp_path)
-    else:
-        df = pd.read_excel(tmp_path)
+    df = load_table(uploaded_file, uploaded_file.name)
 
     st.success("✅ File uploaded successfully")
     st.write("Preview:")

@@ -7,8 +7,12 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 load_dotenv()
-openai_api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=openai_api_key)
+# OpenRouter exposes an OpenAI-compatible API, so the OpenAI SDK works as-is
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY"),
+)
+MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 
 def get_schema(db_path):
     conn = sqlite3.connect(db_path)
@@ -20,11 +24,12 @@ def get_schema(db_path):
     schema_info = ""
     for table_name in tables:
         table_name = table_name[0]
-        cursor.execute(f"PRAGMA table_info({table_name});")
+        cursor.execute(f'PRAGMA table_info("{table_name}");')
         columns = cursor.fetchall()
-        schema_info += f"Table: {table_name}\n"
+        schema_info += f'Table: "{table_name}"\n'
         for col in columns:
-            schema_info += f" - {col[1]} ({col[2]})\n"
+            # Quoted so the model copies names with spaces as valid identifiers
+            schema_info += f' - "{col[1]}" ({col[2]})\n'
 
     conn.close()
     return schema_info
@@ -36,15 +41,21 @@ Given the following database schema:
 {schema}
 
 Write an SQLite SQL query for the question: "{question}"
+Always wrap table and column names in double quotes, exactly as written in the schema.
 Only return valid SQL and nothing else.
 """
 
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model=MODEL,
         messages=[{"role": "user", "content": prompt}]
     )
 
-    return response.choices[0].message.content.strip()
+    sql = response.choices[0].message.content.strip()
+    # Models often wrap the query in a ```sql fence despite the prompt
+    fenced = re.search(r"```(?:sql|sqlite)?\s*(.*?)```", sql, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        sql = fenced.group(1).strip()
+    return sql
 
 def run_sql(db_path, sql):
     conn = sqlite3.connect(db_path)
