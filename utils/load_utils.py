@@ -6,6 +6,9 @@ import pandas as pd
 # How many rows at the top of the file to look at when finding the header
 SCAN_ROWS = 50
 
+def is_csv(filename):
+    return filename.lower().endswith(".csv")
+
 def find_header_row(fill_counts):
     """Index of the first row that is at least half as wide as the widest row.
 
@@ -20,25 +23,30 @@ def find_header_row(fill_counts):
             return i
     return 0
 
-def load_table(file, filename):
-    """Read an uploaded CSV/Excel file, skipping any title rows above the table."""
-    is_csv = filename.lower().endswith(".csv")
+def list_sheets(file):
+    """Sheet names of an uploaded Excel workbook."""
+    sheets = pd.ExcelFile(file).sheet_names
+    file.seek(0)
+    return sheets
 
-    if is_csv:
+def load_table(file, filename, sheet=0):
+    """Read an uploaded CSV/Excel file, skipping any title rows above the table."""
+    file.seek(0)
+    if is_csv(filename):
         head = file.read().decode("utf-8-sig", errors="replace")
         rows = list(csv.reader(io.StringIO(head)))[:SCAN_ROWS]
         fill_counts = [sum(1 for cell in row if cell.strip()) for row in rows]
     else:
-        raw = pd.read_excel(file, header=None, nrows=SCAN_ROWS)
+        raw = pd.read_excel(file, sheet_name=sheet, header=None, nrows=SCAN_ROWS)
         fill_counts = raw.notna().sum(axis=1).tolist()
 
     header_row = find_header_row(fill_counts)
 
     file.seek(0)
-    if is_csv:
+    if is_csv(filename):
         df = pd.read_csv(file, skiprows=header_row)
     else:
-        df = pd.read_excel(file, header=header_row)
+        df = pd.read_excel(file, sheet_name=sheet, header=header_row)
 
     # Drop the empty padding columns/rows that formatted sheets leave around the table
     df = df.dropna(axis=1, how="all").dropna(axis=0, how="all").reset_index(drop=True)
